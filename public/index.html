@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Saran Café — Menu</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <div class="max-w-5xl mx-auto p-6">
+    <header class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-extrabold">Saran Café</h1>
+        <p class="text-sm text-gray-500">Scan the QR on your table to open this menu.</p>
+      </div>
+      <div id="qr-container" class="text-right"></div>
+    </header>
+
+    <div class="mb-6">
+      <input id="search" type="search" placeholder="Search menu..." class="w-full p-3 rounded-lg border" />
+    </div>
+
+    <main id="menu-area" class="space-y-8">
+      <!-- categories will be rendered here -->
+    </main>
+
+    <footer class="mt-8 text-sm text-gray-500 text-center">
+      © Saran Café
+    </footer>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+    import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.1/+esm';
+
+    // ====== CONFIG: replace with your Supabase project values ======
+    const SUPABASE_URL = 'https://kjqibulutfvihewdrenw.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtqcWlidWx1dGZ2aWhld2RyZW53Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2ODg3NTksImV4cCI6MjA3NTI2NDc1OX0.d1MOrXEWyKEyza3rzpgIn6qhDjGsh5RHsua3kqZkEpc';
+    // ==============================================================
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // categories to show (order matters)
+    const CATEGORIES = ['Hot Drinks','Cold Drinks','Juice','Burger','Salad','Wrap'];
+
+    async function fetchItems() {
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('*')
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error(error);
+        return [];
+      }
+      return data || [];
+    }
+
+    function groupByCategory(items) {
+      const map = {};
+      CATEGORIES.forEach(c => map[c] = []);
+      items.forEach(i => {
+        // try to infer category from name if not set in DB; default to 'Hot Drinks'
+        const cat = i.category || guessCategory(i.name) || 'Hot Drinks';
+        if (!map[cat]) map[cat] = [];
+        map[cat].push(i);
+      });
+      return map;
+    }
+
+    // fallback simple guess (if you later add category column)
+    function guessCategory(name) {
+      const s = (name || '').toLowerCase();
+      if (s.includes('coffee') || s.includes('tea')) return 'Hot Drinks';
+      if (s.includes('juice')) return 'Juice';
+      if (s.includes('burger')) return 'Burger';
+      if (s.includes('wrap')) return 'Wrap';
+      if (s.includes('salad')) return 'Salad';
+      if (s.includes('cola') || s.includes('soda') || s.includes('cold')) return 'Cold Drinks';
+      return null;
+    }
+
+    function makeCard(item) {
+      const div = document.createElement('div');
+      div.className = "flex items-center gap-4 p-3 bg-white rounded-lg shadow-sm";
+      const img = item.image_url ? `<img src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.name)}" class="w-28 h-20 object-cover rounded">` 
+        : `<div class="w-28 h-20 bg-gray-100 rounded flex items-center justify-center text-gray-400 text-xs">No Image</div>`;
+      div.innerHTML = `
+        <div class="w-28 flex-shrink-0">${img}</div>
+        <div class="flex-1">
+          <div class="flex justify-between items-start">
+            <div>
+              <h3 class="font-semibold">${escapeHtml(item.name)}</h3>
+            </div>
+            <div class="text-right">
+              <div class="font-semibold">ETB ${Number(item.price).toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+      return div;
+    }
+
+    function escapeHtml(s='') {
+      return String(s).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    async function renderMenu(filter='') {
+      const items = await fetchItems();
+      const grouped = groupByCategory(items);
+      const container = document.getElementById('menu-area');
+      container.innerHTML = '';
+
+      for (const category of Object.keys(grouped)) {
+        const list = grouped[category];
+        if (!list || list.length === 0) continue;
+
+        const filtered = list.filter(i => {
+          const q = filter.trim().toLowerCase();
+          if (!q) return true;
+          return (i.name || '').toLowerCase().includes(q) || (i.price||'').toString().includes(q);
+        });
+        if (filtered.length === 0) continue;
+
+        const sec = document.createElement('section');
+        sec.innerHTML = `<h2 class="text-2xl font-bold mb-3">${escapeHtml(category)}</h2>`;
+        const stack = document.createElement('div');
+        stack.className = 'space-y-3';
+        filtered.forEach(item => stack.appendChild(makeCard(item)));
+        sec.appendChild(stack);
+        container.appendChild(sec);
+      }
+    }
+
+    // QR CODE: small QR that points to this page
+    async function renderQRCode() {
+      try {
+        const url = location.href;
+        const canvas = document.createElement('canvas');
+        await QRCode.toCanvas(canvas, url, { width: 140 });
+        const wrapper = document.getElementById('qr-container');
+        wrapper.innerHTML = '';
+        wrapper.appendChild(canvas);
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL();
+        a.download = 'saran-menu-qr.png';
+        a.className = 'block text-xs mt-1 text-blue-600';
+        a.textContent = 'Download QR';
+        wrapper.appendChild(a);
+      } catch(e) {
+        console.error('QR error', e);
+      }
+    }
+
+    // initial render
+    await renderMenu();
+    renderQRCode();
+
+    // search
+    document.getElementById('search').addEventListener('input', (e) => {
+      renderMenu(e.target.value);
+    });
+
+    // optional realtime: refresh when table changes
+    supabase
+      .channel('public:menu_items')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, payload => {
+        renderMenu(document.getElementById('search').value || '');
+      })
+      .subscribe();
+  </script>
+</body>
+</html>

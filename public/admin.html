@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Saran Café — Admin</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <div class="max-w-4xl mx-auto p-6">
+    <header class="flex items-center justify-between mb-6">
+      <h1 class="text-2xl font-bold">Saran Café — Admin</h1>
+      <div id="auth-area"></div>
+    </header>
+
+    <section class="mb-6">
+      <form id="login-form" class="grid grid-cols-1 gap-3 bg-white p-4 rounded shadow">
+        <div class="text-sm text-gray-600">Sign in with your admin email</div>
+        <input id="email" type="email" placeholder="email" class="border p-2 rounded" />
+        <input id="password" type="password" placeholder="password" class="border p-2 rounded" />
+        <div class="flex gap-2">
+          <button id="signin-btn" class="px-4 py-2 bg-blue-600 text-white rounded" type="button">Sign In</button>
+          <button id="signup-btn" class="px-4 py-2 border rounded" type="button">Create Account</button>
+          <button id="magic-btn" class="px-4 py-2 border rounded" type="button">Send Magic Link</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="admin-panel" style="display:none;">
+      <div class="mb-6 bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-2">Add / Edit Item</h2>
+        <form id="item-form" class="grid grid-cols-1 gap-3">
+          <input type="hidden" id="item-id" />
+          <input id="name" placeholder="Name" class="border p-2 rounded" required />
+          <input id="price" placeholder="Price (ETB)" type="number" step="0.01" class="border p-2 rounded" required />
+          <label class="text-sm text-gray-600">Image (upload from computer)</label>
+          <input id="image-file" type="file" accept="image/*" class="border p-2 rounded" />
+          <div class="flex gap-2">
+            <button class="px-4 py-2 bg-green-600 text-white rounded" type="submit">Save</button>
+            <button id="reset-btn" type="button" class="px-4 py-2 border rounded">Reset</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white p-4 rounded shadow">
+        <h2 class="font-semibold mb-2">Current Items</h2>
+        <div id="items-list" class="space-y-3"></div>
+      </div>
+    </section>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+    // ====== CONFIG: replace with your Supabase values ======
+    const SUPABASE_URL = 'https://kjqibulutfvihewdrenw.supabase.co';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtqcWlidWx1dGZ2aWhld2RyZW53Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2ODg3NTksImV4cCI6MjA3NTI2NDc1OX0.d1MOrXEWyKEyza3rzpgIn6qhDjGsh5RHsua3kqZkEpc';
+    // =======================================================
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const loginForm = document.getElementById('login-form');
+    const adminPanel = document.getElementById('admin-panel');
+    const authArea = document.getElementById('auth-area');
+    const itemsList = document.getElementById('items-list');
+    const itemForm = document.getElementById('item-form');
+
+    // AUTH UI
+    function renderAuth(user) {
+      authArea.innerHTML = '';
+      if (user) {
+        const p = document.createElement('div');
+        p.className = 'text-sm';
+        p.textContent = `Signed in: ${user.email}`;
+        const out = document.createElement('button');
+        out.className = 'ml-3 px-3 py-1 border rounded';
+        out.textContent = 'Sign Out';
+        out.onclick = async () => {
+          await supabase.auth.signOut();
+          location.reload();
+        };
+        authArea.appendChild(p);
+        authArea.appendChild(out);
+      } else {
+        // nothing else
+      }
+    }
+
+    async function checkAdminAndShow() {
+      const { data: session } = await supabase.auth.getSession();
+      const user = session?.session?.user || null;
+      renderAuth(user);
+
+      if (!user) {
+        adminPanel.style.display = 'none';
+        return;
+      }
+
+      // verify admin row exists for this user
+      const { data: adminExists, error } = await supabase
+        .from('admins')
+        .select('id')
+        .eq('id', user.id)
+        .limit(1);
+
+      if (error) {
+        console.error(error);
+        alert('Error checking admin status');
+        return;
+      }
+
+      if (adminExists && adminExists.length > 0) {
+        adminPanel.style.display = 'block';
+        loginForm.style.display = 'none';
+        loadItems();
+      } else {
+        adminPanel.style.display = 'none';
+        alert('You are not an admin. Add your user id to public.admins in Supabase.');
+      }
+    }
+
+    // Sign in handlers
+    document.getElementById('signin-btn').onclick = async () => {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if (!email || !password) return alert('Enter email and password.');
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) return alert(error.message);
+      setTimeout(checkAdminAndShow, 700);
+    };
+
+    // create account (for first-time admin if you want)
+    document.getElementById('signup-btn').onclick = async () => {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if (!email || !password) return alert('Enter email and password.');
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) return alert(error.message);
+      alert('Account created. Ask a project owner to add your UUID to public.admins or check your Supabase Auth users to copy your UUID.');
+    };
+
+    document.getElementById('magic-btn').onclick = async () => {
+      const email = document.getElementById('email').value.trim();
+      if (!email) return alert('Enter email for magic link.');
+      const { error } = await supabase.auth.signInWithOtp({ email });
+      if (error) return alert(error.message);
+      alert('Magic link sent. Click it in your email to sign in.');
+    };
+
+    // Image upload helper (uploads to storage and returns public URL)
+    async function uploadImageToStorage(file) {
+      if (!file) return null;
+      const ext = file.name.split('.').pop();
+      const filename = `${Date.now()}.${ext}`;
+      const path = `${filename}`;
+      const { error: uploadError } = await supabase.storage.from('menu-images').upload(path, file, { upsert: false });
+      if (uploadError) {
+        console.error(uploadError);
+        alert('Image upload failed: ' + uploadError.message);
+        return null;
+      }
+      const { data } = supabase.storage.from('menu-images').getPublicUrl(path);
+      return data.publicUrl;
+    }
+
+    // CRUD: load items
+    async function loadItems() {
+      const { data, error } = await supabase.from('menu_items').select('*').order('name', { ascending: true });
+      if (error) {
+        console.error(error);
+        return;
+      }
+      itemsList.innerHTML = '';
+      data.forEach(i => itemsList.appendChild(makeRow(i)));
+    }
+
+    function makeRow(item) {
+      const div = document.createElement('div');
+      div.className = 'flex items-center justify-between bg-gray-50 p-3 rounded';
+      div.innerHTML = `
+        <div class="flex items-center gap-3">
+          <div class="w-20 h-16 bg-white rounded overflow-hidden border">${item.image_url ? `<img src="${escapeHtml(item.image_url)}" class="w-full h-full object-cover">` : `<div class="h-full flex items-center justify-center text-xs text-gray-400">No Image</div>`}</div>
+          <div>
+            <div class="font-semibold">${escapeHtml(item.name)}</div>
+            <div class="text-sm text-gray-500">ETB ${Number(item.price).toFixed(2)}</div>
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button data-id="${item.id}" class="edit-btn px-3 py-1 border rounded">Edit</button>
+          <button data-id="${item.id}" class="del-btn px-3 py-1 border rounded">Delete</button>
+        </div>
+      `;
+      div.querySelector('.edit-btn').onclick = () => populateForm(item);
+      div.querySelector('.del-btn').onclick = () => deleteItem(item.id);
+      return div;
+    }
+
+    function escapeHtml(s='') {
+      return String(s).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    function populateForm(item) {
+      document.getElementById('item-id').value = item.id;
+      document.getElementById('name').value = item.name;
+      document.getElementById('price').value = item.price;
+    }
+
+    document.getElementById('reset-btn').onclick = () => {
+      itemForm.reset();
+      document.getElementById('item-id').value = '';
+    };
+
+    async function deleteItem(id) {
+      if (!confirm('Delete this item?')) return;
+      const { error } = await supabase.from('menu_items').delete().eq('id', id);
+      if (error) return alert(error.message);
+      loadItems();
+    }
+
+    // Save (insert or update)
+    itemForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('item-id').value;
+      const name = document.getElementById('name').value.trim();
+      const price = parseFloat(document.getElementById('price').value || 0);
+      const fileInput = document.getElementById('image-file');
+
+      let image_url = null;
+      if (fileInput.files && fileInput.files[0]) {
+        image_url = await uploadImageToStorage(fileInput.files[0]);
+      }
+
+      try {
+        if (id) {
+          const updates = { name, price };
+          if (image_url) updates.image_url = image_url;
+          const { error } = await supabase.from('menu_items').update(updates).eq('id', id);
+          if (error) throw error;
+        } else {
+          const insertObj = { name, price };
+          if (image_url) insertObj.image_url = image_url;
+          const { error } = await supabase.from('menu_items').insert([insertObj]);
+          if (error) throw error;
+        }
+        itemForm.reset();
+        document.getElementById('item-id').value = '';
+        loadItems();
+        alert('Saved.');
+      } catch (err) {
+        console.error(err);
+        alert(err.message || 'Error saving item');
+      }
+    };
+
+    // check auth on load
+    supabase.auth.onAuthStateChange((event, session) => {
+      checkAdminAndShow();
+    });
+
+    (async () => {
+      await checkAdminAndShow();
+    })();
+
+    // realtime: update list when db changes
+    supabase
+      .channel('public:menu_items_admin')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, payload => {
+        loadItems();
+      })
+      .subscribe();
+  </script>
+</body>
+</html>
